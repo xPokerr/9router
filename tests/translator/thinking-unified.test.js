@@ -46,6 +46,13 @@ describe("extractThinking", () => {
   it("openai reasoning_effort", () => {
     expect(extractThinking({ reasoning_effort: "high" })).toEqual({ mode: "level", level: "high" });
   });
+  it.each(["high", "max", "ultra"])("prefers explicit reasoning_effort %s over enabled thinking", (level) => {
+    expect(extractThinking({ thinking: { type: "enabled" }, reasoning_effort: level }))
+      .toEqual({ mode: "level", level });
+  });
+  it("keeps thinking.disabled authoritative over a stale reasoning_effort", () => {
+    expect(extractThinking({ thinking: { type: "disabled" }, reasoning_effort: "high" })).toEqual({ mode: "none" });
+  });
   it("responses reasoning.effort none", () => {
     expect(extractThinking({ reasoning: { effort: "none" } })).toEqual({ mode: "none" });
   });

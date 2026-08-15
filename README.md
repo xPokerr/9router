@@ -1,25 +1,20 @@
-<div align="center">
-  <img src="./images/9router.png?1" alt="9Router Dashboard" width="800"/>
-  
-  # 9Router - FREE AI Router & Token Saver
-  
-  **Never stop coding. Save 20-40% tokens with RTK + auto-fallback to FREE & cheap AI models.**
-  
-  **Connect All AI Code Tools (Claude Code, Cursor, Antigravity, Copilot, Codex, Gemini, OpenCode, Cline, OpenClaw...) to 40+ AI Providers & 100+ Models.**
-  
-  [![npm](https://img.shields.io/npm/v/9router.svg)](https://www.npmjs.com/package/9router)
-  [![Downloads](https://img.shields.io/npm/dm/9router.svg)](https://www.npmjs.com/package/9router)
-  [![Docker Pulls](https://img.shields.io/docker/pulls/decolua/9router.svg?logo=docker&label=Docker%20pulls)](https://hub.docker.com/r/decolua/9router)
-  [![GHCR](https://img.shields.io/badge/GHCR-decolua%2F9router-blue?logo=github)](https://github.com/decolua/9router/pkgs/container/9router)
-  [![License](https://img.shields.io/npm/l/9router.svg)](https://github.com/decolua/9router/blob/main/LICENSE)
+# 9router — xPokerr compatibility fork
 
-<a href="https://trendshift.io/repositories/22628" target="_blank"><img src="https://trendshift.io/api/badge/repositories/22628" alt="decolua%2F9router | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+> **Unofficial fork of [decolua/9router](https://github.com/decolua/9router).**
+> It remains a local AI gateway/router for coding clients: it exposes OpenAI-compatible endpoints, translates between provider protocols, manages providers and quotas, and can apply token-saving routing features.
 
-[🚀 Quick Start](#-quick-start) • [💡 Features](#-key-features) • [📖 Setup](#-setup-guide) • [🌐 Website](https://9router.com)
+## What this fork changes
 
-[🇧🇷 Português (Brasil)](./i18n/README.pt-BR.md) • [🇻🇳 Tiếng Việt](./i18n/README.vi.md) • [🇨🇳 中文](./i18n/README.zh-CN.md) • [🇯🇵 日本語](./i18n/README.ja-JP.md) • [🇷🇺 Русский](./i18n/README.ru.md) • [🇹🇭 ไทย](./i18n/README.th.md) • [🇮🇷 فارسی](./i18n/README.fa_IR.md) • [🇮🇩 Indonesia](./i18n/README.id-ID.md) • [🇪🇸 Español](./i18n/README.es.md) • [🇫🇷 Français](./i18n/README.fr.md)
+This fork keeps upstream 9router as its base while carrying focused compatibility fixes that are useful in this deployment:
 
-</div>
+- **OpenCode / DeepSeek reliability:** caps `deepseek-v4-flash-free` output to its accepted `131072` limit and handles terminal states correctly when translating OpenAI Responses streams.
+- **Faithful thinking diagnostics:** when a harness sends an explicit level such as `high`, `max`, or `ultra`, request logs report that level instead of a misleading `THINK:auto` when the provider also requires `thinking: { type: "enabled" }`.
+- **Standalone CLI packaging:** preserves required pnpm links in the traced dependency tree while avoiding recursive workspace copies.
+- **Small, reviewable patches:** upstream behavior is retained unless a documented compatibility issue requires a change.
+
+This is not an official 9router release and does not replace upstream support, releases, or security advisories. For the upstream project, installation options, provider documentation, and general usage, see [decolua/9router](https://github.com/decolua/9router).
+
+The remaining sections are retained from upstream as general 9router reference material.
 
 ---
 
@@ -1524,28 +1519,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 <div align="center">
   <sub>Built with ❤️ for developers who code 24/7</sub>
 </div>
-
-### Compatibility fixes in this fork
-
-This fork keeps interoperability fixes with regression coverage:
-
-- **OpenCode / DeepSeek V4 Flash Free:** requests for `deepseek-v4-flash-free`
-  are capped to the endpoint's accepted completion limit of `131072` for all
-  OpenAI-compatible output-token field names. This prevents an upstream 400
-  caused by forwarding the generic DeepSeek 384K output capability.
-- **OpenAI Responses translation:** a Chat Completions stream with a terminal
-  `finish_reason`, including `length` or `content_filter`, is a completed SSE
-  turn. Explicit upstream errors and EOF without a terminal finish reason still
-  remain failures/incomplete responses; they are not converted to successes.
-- **Standalone CLI packaging:** pnpm links inside the traced dependency tree are
-  preserved and Next's accidental nested `node_modules/node_modules` workspace
-  link is ignored, avoiding recursive copies of the worktree dependency store.
-
-Validate the focused coverage with:
-
-```bash
-pnpm --dir tests exec vitest run \
-  unit/param-support.test.js \
-  unit/reasoningContentInjector.test.js \
-  unit/openai-responses-terminal-event.test.js
-```

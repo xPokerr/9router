@@ -58,24 +58,27 @@ export function extractThinking(body) {
     return { mode: "level", level: e };
   }
 
-  // Claude shape
+  // Claude shape. An explicit disable remains authoritative even when a
+  // compatibility shim leaves a stale reasoning_effort on the body.
   const t = body.thinking;
-  if (t && typeof t === "object") {
-    if (t.type === "disabled") return { mode: "none" };
-    if (t.type === "adaptive" || t.type === "enabled") {
-      const budget = Number(t.budget_tokens);
-      if (Number.isFinite(budget) && budget > 0) return { mode: "budget", budget };
-      return { mode: "auto" };
-    }
-  }
+  if (t && typeof t === "object" && t.type === "disabled") return { mode: "none" };
 
-  // OpenAI chat / Responses shape
+  // OpenAI chat / Responses shape. Check this before enabled/adaptive Claude
+  // thinking: providers such as DeepSeek send both `thinking:{type:"enabled"}`
+  // and `reasoning_effort`. The latter is the explicit harness-selected level
+  // and must be preserved in the request log instead of being reported as auto.
   const effort = body.reasoning_effort ?? (typeof body.reasoning === "object" ? body.reasoning?.effort : null);
   if (typeof effort === "string" && effort) {
     const e = effort.toLowerCase();
     if (e === "none" || e === "off") return { mode: "none" };
     if (e === "auto") return { mode: "auto" };
     return { mode: "level", level: e };
+  }
+
+  if (t && typeof t === "object" && (t.type === "adaptive" || t.type === "enabled")) {
+    const budget = Number(t.budget_tokens);
+    if (Number.isFinite(budget) && budget > 0) return { mode: "budget", budget };
+    return { mode: "auto" };
   }
 
   // Gemini shape (top-level, generationConfig, or request envelope)
