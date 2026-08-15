@@ -1524,3 +1524,28 @@ MIT License - see [LICENSE](LICENSE) for details.
 <div align="center">
   <sub>Built with ❤️ for developers who code 24/7</sub>
 </div>
+
+### Compatibility fixes in this fork
+
+This fork keeps interoperability fixes with regression coverage:
+
+- **OpenCode / DeepSeek V4 Flash Free:** requests for `deepseek-v4-flash-free`
+  are capped to the endpoint's accepted completion limit of `131072` for all
+  OpenAI-compatible output-token field names. This prevents an upstream 400
+  caused by forwarding the generic DeepSeek 384K output capability.
+- **OpenAI Responses translation:** a Chat Completions stream with a terminal
+  `finish_reason`, including `length` or `content_filter`, is a completed SSE
+  turn. Explicit upstream errors and EOF without a terminal finish reason still
+  remain failures/incomplete responses; they are not converted to successes.
+- **Standalone CLI packaging:** pnpm links inside the traced dependency tree are
+  preserved and Next's accidental nested `node_modules/node_modules` workspace
+  link is ignored, avoiding recursive copies of the worktree dependency store.
+
+Validate the focused coverage with:
+
+```bash
+pnpm --dir tests exec vitest run \
+  unit/param-support.test.js \
+  unit/reasoningContentInjector.test.js \
+  unit/openai-responses-terminal-event.test.js
+```

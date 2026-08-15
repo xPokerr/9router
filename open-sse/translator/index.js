@@ -234,7 +234,9 @@ export function initState(sourceFormat) {
     finishReason: null,
     finishReasonSent: false,
     usage: null,
-    contentBlockIndex: -1
+    contentBlockIndex: -1,
+    responsesTerminalSeen: false,
+    protocolError: null
   };
 
   // Add openai-responses specific fields
@@ -262,7 +264,9 @@ export function initState(sourceFormat) {
       funcArgsDone: {},
       funcItemDone: {},
       customToolNames: new Set(),
-      completedSent: false
+      completedSent: false,
+      failureSent: false,
+      terminalSeen: false
     };
   }
 

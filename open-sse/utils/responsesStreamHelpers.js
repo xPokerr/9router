@@ -7,6 +7,7 @@ const OPENAI_RESPONSES_TERMINAL_EVENTS = new Set([
   "response.completed",
   "response.done",
   "response.failed",
+  "response.incomplete",
   "error"
 ]);
 
@@ -20,7 +21,28 @@ export function isOpenAIResponsesTerminalEvent(eventName, chunk) {
   const type = getOpenAIResponsesEventName(eventName, chunk);
   if (OPENAI_RESPONSES_TERMINAL_EVENTS.has(type)) return true;
   const status = chunk?.response?.status;
-  return status === "completed" || status === "failed";
+  return status === "completed" || status === "failed" || status === "incomplete";
+}
+
+export function getOpenAIResponsesProtocolError(eventName, chunk) {
+  const type = getOpenAIResponsesEventName(eventName, chunk);
+  if (type === "response.incomplete") {
+    const detail = chunk?.response?.incomplete_details || chunk?.error || {};
+    return {
+      type: "stream_error",
+      code: detail.code || "protocol_incomplete",
+      message: detail.message || detail.reason || JSON.stringify(detail),
+    };
+  }
+  if (type === "response.failed" || type === "error") {
+    const error = chunk?.error || chunk?.response?.error;
+    return {
+      type: "stream_error",
+      code: error?.code || "upstream_error",
+      message: error?.message || "Upstream response failed",
+    };
+  }
+  return null;
 }
 
 const sharedEncoder = new TextEncoder();

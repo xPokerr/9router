@@ -18,9 +18,9 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   if (!chunk) {
     return flushEvents(state);
   }
-  
-  if (!chunk.choices?.length) return [];
-  
+
+  if (state.terminalSeen) return [];
+
   const events = [];
   const nextSeq = () => ++state.seq;
   
@@ -28,6 +28,14 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     data.sequence_number = nextSeq();
     events.push({ event: eventType, data });
   };
+
+  captureUsage(state, chunk.usage);
+  if (chunk.error) {
+    state.protocolError = normalizeError(chunk.error, "upstream_error", "Upstream Chat stream failed");
+    sendFailure(state, emit, "failed", state.protocolError);
+    return events;
+  }
+  if (!chunk.choices?.length) return [];
 
   const choice = chunk.choices[0];
   const idx = choice.index || 0;
@@ -107,10 +115,15 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     }
   }
 
-  // Handle finish_reason
+  // A Chat Completions finish_reason always terminates the upstream SSE turn.
+  //
+  // DeepSeek and several compatible providers use "length" for a valid answer
+  // capped by the output limit. It is not a broken stream: explicit upstream
+  // error chunks and an EOF without a finish_reason are handled as failures.
   if (choice.finish_reason) {
     for (const i in state.msgItemAdded) closeMessage(state, emit, i);
     closeReasoning(state, emit);
+    state.terminalReason = choice.finish_reason;
     for (const i in state.funcCallIds) closeToolCall(state, emit, i);
     sendCompleted(state, emit);
   }
@@ -365,26 +378,79 @@ function closeToolCall(state, emit, idx) {
   }
 }
 
+function responseUsage(state) {
+  if (!state.usage || typeof state.usage !== "object") return undefined;
+  return {
+    input_tokens: state.usage.prompt_tokens || 0,
+    output_tokens: state.usage.completion_tokens || 0,
+    total_tokens: state.usage.total_tokens ?? ((state.usage.prompt_tokens || 0) + (state.usage.completion_tokens || 0)),
+    ...(state.usage.prompt_tokens_details ? { input_tokens_details: state.usage.prompt_tokens_details } : {}),
+    ...(state.usage.completion_tokens_details ? { output_tokens_details: state.usage.completion_tokens_details } : {}),
+  };
+}
+
+function normalizeError(error, code = "upstream_error", fallback = "Upstream Chat stream failed") {
+  if (typeof error === "string") return { code, message: error };
+  return { code: error?.code || code, message: error?.message || fallback, ...(error?.reason ? { reason: error.reason } : {}) };
+}
+
+function captureUsage(state, usage) {
+  if (!usage || typeof usage !== "object") return;
+  const promptDetails = usage.prompt_tokens_details || usage.input_tokens_details;
+  const completionDetails = usage.completion_tokens_details || usage.output_tokens_details;
+  state.usage = buildUsage({
+    promptTokens: usage.prompt_tokens || usage.input_tokens || 0,
+    completionTokens: usage.completion_tokens || usage.output_tokens || 0,
+    totalTokens: usage.total_tokens ?? ((usage.prompt_tokens || usage.input_tokens || 0) + (usage.completion_tokens || usage.output_tokens || 0)),
+    cachedTokens: promptDetails?.cached_tokens || 0,
+    cacheCreationTokens: promptDetails?.cache_creation_tokens || 0,
+    reasoningTokens: completionDetails?.reasoning_tokens || 0,
+  });
+}
+
 function sendCompleted(state, emit) {
-  if (!state.completedSent) {
+  if (!state.completedSent && !state.failureSent) {
     state.completedSent = true;
-    emit("response.completed", {
-      type: "response.completed",
-      response: {
-        id: state.responseId,
-        object: "response",
-        created_at: state.created,
-        status: "completed",
-        background: false,
-        error: null
-      }
-    });
+    state.terminalSeen = true;
+    const response = {
+      id: state.responseId,
+      object: "response",
+      created_at: state.created,
+      status: "completed",
+      background: false,
+      error: null,
+    };
+    const usage = responseUsage(state);
+    if (usage) response.usage = usage;
+    emit("response.completed", { type: "response.completed", response });
   }
 }
 
+function sendFailure(state, emit, status = "incomplete", error = null) {
+  if (state.completedSent || state.failureSent) return;
+  state.failureSent = true;
+  state.terminalSeen = true;
+  const failure = error || { code: "protocol_incomplete", message: "upstream stream closed before a terminal response event" };
+  state.protocolError = failure;
+  const response = {
+    id: state.responseId,
+    object: "response",
+    created_at: state.created,
+    status,
+    background: false,
+    error: failure,
+  };
+  const usage = responseUsage(state);
+  if (usage) response.usage = usage;
+  emit(status === "failed" ? "response.failed" : "response.incomplete", {
+    type: status === "failed" ? "response.failed" : "response.incomplete",
+    response,
+  });
+}
+
 function flushEvents(state) {
-  if (state.completedSent) return [];
-  
+  if (state.terminalSeen) return [];
+
   const events = [];
   const nextSeq = () => ++state.seq;
   const emit = (eventType, data) => {
@@ -394,9 +460,8 @@ function flushEvents(state) {
 
   for (const i in state.msgItemAdded) closeMessage(state, emit, i);
   closeReasoning(state, emit);
-  for (const i in state.funcCallIds) closeToolCall(state, emit, i);
-  sendCompleted(state, emit);
-  
+  if (!state.terminalSeen) sendFailure(state, emit, "incomplete");
+
   return events;
 }
 
@@ -414,8 +479,7 @@ function computeFinishReason(state) {
  */
 export function openaiResponsesToOpenAIResponse(chunk, state) {
   if (!chunk) {
-    // Flush: send final chunk with finish_reason
-    if (state.finishReasonSent || !state.started) return null;
+    if (state.finishReasonSent || !state.started || !state.responsesTerminalSeen || state.protocolError) return null;
 
     const finishReason = computeFinishReason(state);
 
@@ -499,18 +563,40 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
     return null;
   }
 
+  if (eventType === "response.incomplete") {
+    state.responsesTerminalSeen = true;
+    const detail = data.response?.incomplete_details || data.error || {};
+    state.protocolError = detail;
+    return {
+      error: {
+        type: "stream_error",
+        code: detail.code || "protocol_incomplete",
+        message: detail.message || detail.reason || JSON.stringify(detail) || "Upstream response was incomplete",
+      }
+    };
+  }
+
   // Response completed
   if (eventType === "response.completed" || eventType === "response.done") {
-    // Extract usage from response.completed event
+    state.responsesTerminalSeen = true;
     const responseUsage = data.response?.usage;
     if (responseUsage && typeof responseUsage === "object") {
       const inputTokens = responseUsage.input_tokens || responseUsage.prompt_tokens || 0;
       const outputTokens = responseUsage.output_tokens || responseUsage.completion_tokens || 0;
       // OpenAI Responses API: input_tokens already includes cached_tokens
       // Cache info is in input_tokens_details.cached_tokens
-      const cacheReadTokens = responseUsage.input_tokens_details?.cached_tokens || responseUsage.cache_read_input_tokens || 0;
-      
-      state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens });
+      const inputDetails = responseUsage.input_tokens_details || {};
+      const cacheReadTokens = inputDetails.cached_tokens || responseUsage.cache_read_input_tokens || 0;
+      const cacheCreationTokens = inputDetails.cache_creation_tokens || responseUsage.cache_creation_input_tokens || 0;
+      const reasoningTokens = responseUsage.output_tokens_details?.reasoning_tokens || 0;
+      state.usage = buildUsage({
+        promptTokens: inputTokens,
+        completionTokens: outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cachedTokens: cacheReadTokens,
+        cacheCreationTokens,
+        reasoningTokens,
+      });
     }
     
     if (!state.finishReasonSent) {
@@ -537,22 +623,17 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
 
   // Error events from Responses API (e.g. model_not_found)
   if (eventType === "error" || eventType === "response.failed") {
-    // Avoid emitting duplicate errors (error + response.failed arrive back-to-back)
-    if (state.finishReasonSent) return null;
-
-    const error = data.error || data.response?.error;
-    if (error) {
-      state.error = error;
-      state.finishReasonSent = true;
-
-      // Surface the error as an OpenAI-compatible error chunk
-      return buildChunk(
-        { id: state.chatId || `chatcmpl-${Date.now()}`, created: state.created || Math.floor(Date.now() / 1000), model: state.model || MODEL_FALLBACK },
-        { content: `[Error] ${error.message || JSON.stringify(error)}` },
-        OPENAI_FINISH.STOP
-      );
-    }
-    return null;
+    if (state.protocolError) return null;
+    const error = data.error || data.response?.error || { code: "upstream_error", message: "Upstream response failed" };
+    state.responsesTerminalSeen = true;
+    state.protocolError = error;
+    return {
+      error: {
+        type: "stream_error",
+        code: error.code || "upstream_error",
+        message: error.message || JSON.stringify(error),
+      },
+    };
   }
 
   // Reasoning summary delta → emit as reasoning_content for client thinking display

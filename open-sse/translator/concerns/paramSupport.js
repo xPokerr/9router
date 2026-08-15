@@ -21,6 +21,9 @@ const STRIP_RULES = [
   // "integer above maximum value, expected <= 32768". Pin an explicit endpoint cap;
   // min() with the model ceiling still applies if a variant's own limit is lower.
   { provider: "volcengine-ark", match: /kimi/i, maxOutputCap: 32768, clampToModelMaxOutput: true },
+  // OpenCode's DeepSeek V4 Flash free endpoint rejects the generic DeepSeek
+  // 384K output limit; its upstream completion limit is 131072.
+  { provider: "opencode", match: /deepseek-v4-flash-free/i, maxOutputCap: 131072 },
 ];
 
 // Test a rule's match (regex or predicate) against the model id.

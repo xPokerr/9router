@@ -52,4 +52,20 @@ describe("stripUnsupportedParams", () => {
 
     expect(body.max_tokens).toBe(64000);
   });
+
+  it("caps OpenCode DeepSeek V4 Flash free output fields at its upstream limit", () => {
+    const body = {
+      max_tokens: 384000,
+      max_completion_tokens: 384000,
+      max_output_tokens: 384000,
+    };
+
+    stripUnsupportedParams("opencode", "deepseek-v4-flash-free", body);
+
+    expect(body).toEqual({
+      max_tokens: 131072,
+      max_completion_tokens: 131072,
+      max_output_tokens: 131072,
+    });
+  });
 });

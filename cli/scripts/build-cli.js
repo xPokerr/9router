@@ -35,7 +35,7 @@ function shouldExclude(name) {
   });
 }
 
-function copyRecursive(src, dest) {
+function copyRecursive(src, dest, sourceRoot = src) {
   if (!fs.existsSync(src)) {
     console.warn(`Warning: Source ${src} does not exist`);
     return;
@@ -62,13 +62,29 @@ function copyRecursive(src, dest) {
     }
 
     if (entry.isDirectory()) {
-      copyRecursive(srcPath, destPath);
+      copyRecursive(srcPath, destPath, sourceRoot);
     } else if (entry.isSymbolicLink()) {
-      // Resolve and copy target (avoid linking outside bundle)
+      // Next's workspace tracing can add node_modules/node_modules -> <workspace>/node_modules.
+      // The standalone tree already includes its traced dependencies; following this link
+      // re-copies the entire workspace dependency store (and pnpm links beneath it).
+      if (entry.name === "node_modules") {
+        console.warn(`Skipping nested node_modules symlink in standalone trace: ${srcPath}`);
+        continue;
+      }
+
+      // Preserve links whose targets already belong to this standalone tree.
+      // pnpm exposes packages through relative links into node_modules/.pnpm;
+      // dereferencing them recursively copies the same dependency tree many
+      // times and can make a CLI candidate grow to tens of gigabytes.
+      const link = fs.readlinkSync(srcPath);
       try {
         const real = fs.realpathSync(srcPath);
-        if (fs.statSync(real).isDirectory()) {
-          copyRecursive(real, destPath);
+        const relativeToRoot = path.relative(sourceRoot, real);
+        const isInternal = relativeToRoot && relativeToRoot !== ".." && !relativeToRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeToRoot);
+        if (isInternal) {
+          fs.symlinkSync(link, destPath);
+        } else if (fs.statSync(real).isDirectory()) {
+          copyRecursive(real, destPath, real);
         } else {
           fs.copyFileSync(real, destPath);
         }

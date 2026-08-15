@@ -148,13 +148,17 @@ describe("injectReasoningContent — MiniMax thinking round-trip", () => {
 });
 
 describe("OpenCodeExecutor — issue #1543 regression", () => {
-  it("runs the injector so deepseek-v4-flash-free round-trips reasoning_content", () => {
+  it("caps output and runs the injector so deepseek-v4-flash-free round-trips reasoning_content", () => {
     const executor = new OpenCodeExecutor();
     const out = executor.transformRequest(
       "deepseek-v4-flash-free",
-      bodyWith([{ role: "user", content: "hi" }, assistantWithToolCall]),
+      {
+        ...bodyWith([{ role: "user", content: "hi" }, assistantWithToolCall]),
+        max_tokens: 384000,
+      },
     );
     const assistant = out.messages.find((m) => m.role === "assistant");
+    expect(out.max_tokens).toBe(131072);
     expect(assistant.reasoning_content).toBeDefined();
   });
 });
