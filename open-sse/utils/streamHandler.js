@@ -2,6 +2,12 @@
 import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
+// True when a stream was aborted because the upstream sent no bytes for
+// STREAM_STALL_TIMEOUT_MS — the provider/account is stalled, not the client.
+export function isStreamStallTimeout(error) {
+  return !!error && error.message === "stream stall timeout";
+}
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });

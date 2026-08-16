@@ -73,6 +73,8 @@ export const ERROR_RULES = [
   { status: 403, cooldownMs: COOLDOWN.long },
   { status: 404, cooldownMs: COOLDOWN.long },
   { status: 429, backoff: true },
+  // Gateway timeouts (incl. stream-stall aborts) → skip the account for a while
+  { status: 504, cooldownMs: COOLDOWN.long },
 ];
 
 // Backward compat: COOLDOWN_MS object (used by index.js re-export)

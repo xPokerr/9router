@@ -17,6 +17,7 @@ import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
+import { isStreamStallTimeout } from "open-sse/utils/streamHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
@@ -295,6 +296,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       },
       onRequestSuccess: async () => {
         await clearAccountError(credentials.connectionId, credentials, model);
+      },
+      onStreamError: async (error) => {
+        // A 6-minute upstream silence means the account is throttled/stalled for
+        // this model: lock it so the next request falls back (fill-first is kept —
+        // only the failing account is skipped, no per-request rotation).
+        if (isStreamStallTimeout(error)) {
+          await markAccountUnavailable(credentials.connectionId, 504, error.message, provider, model);
+        }
       }
     });
 
