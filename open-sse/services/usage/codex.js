@@ -3,7 +3,7 @@
  */
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
-import { U, parseResetTime, toFiniteNumber } from "./shared.js";
+import { U, parseResetTime, toFiniteNumber, fetchWithTimeout } from "./shared.js";
 
 // Codex (OpenAI) API config
 const CODEX_CONFIG = {
@@ -11,6 +11,11 @@ const CODEX_CONFIG = {
   resetCreditsUrl: U("codex").resetCreditsUrl,
   resetCreditsConsumeUrl: U("codex").resetCreditsConsumeUrl,
 };
+
+// Bound the quota-tracker fetches so a stalled upstream (DNS/connect/TLS) fails
+// with a clear timeout error instead of occupying the usage route indefinitely.
+// Exported for tests.
+export const CODEX_USAGE_TIMEOUT_MS = 15_000;
 
 function toIsoDate(value) {
   if (!value) return null;
@@ -82,13 +87,13 @@ function getCodexReviewRateLimit(data) {
 
 export async function getCodexUsage(accessToken, proxyOptions = null) {
   try {
-    const response = await proxyAwareFetch(CODEX_CONFIG.usageUrl, {
+    const response = await fetchWithTimeout(CODEX_CONFIG.usageUrl, {
       method: "GET",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "Accept": "application/json",
       },
-    }, proxyOptions);
+    }, CODEX_USAGE_TIMEOUT_MS, proxyOptions);
 
     if (!response.ok) {
       return { message: `Codex connected. Usage API temporarily unavailable (${response.status}).` };
@@ -129,10 +134,10 @@ export async function getCodexRateLimitResetCredits(accessToken, proxyOptions = 
   };
   if (accountId) headers["ChatGPT-Account-ID"] = accountId;
 
-  const response = await proxyAwareFetch(CODEX_CONFIG.resetCreditsUrl, {
+  const response = await fetchWithTimeout(CODEX_CONFIG.resetCreditsUrl, {
     method: "GET",
     headers,
-  }, proxyOptions);
+  }, CODEX_USAGE_TIMEOUT_MS, proxyOptions);
 
   let data = null;
   try {
