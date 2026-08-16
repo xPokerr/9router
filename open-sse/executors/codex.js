@@ -23,6 +23,11 @@ const CODEX_SSE_USER_OUTPUT_PATTERNS = [
   '"type":"response.function_call_arguments.delta"',
 ];
 const CODEX_SSE_PEEK_BYTES = 256 * 1024;
+// Peek is time-bounded so the client receives the stream live while the model
+// reasons: transient upstream errors surface in the first events (well inside
+// this window), and reasoning deltas are relayed instead of being buffered
+// until the first output_text event (which can take minutes with thinking on).
+const CODEX_SSE_PEEK_TIMEOUT_MS = 10_000;
 const CODEX_MODEL_CAPACITY_MESSAGE = "Selected model is at capacity. Please try a different model.";
 
 // Server-generated item id prefixes that Codex /responses cannot resolve when store=false
@@ -306,7 +311,7 @@ export class CodexExecutor extends BaseExecutor {
   // Peek first N bytes of SSE body to detect upstream transient errors.
   // Returns { matched: string|null, message: string|null, accountFallback: boolean, replacementBody: ReadableStream|null }.
   // Caller must use replacementBody when no error matched (original body has been read).
-  async _peekSseTransientError(response) {
+  async _peekSseTransientError(response, { timeoutMs = CODEX_SSE_PEEK_TIMEOUT_MS } = {}) {
     if (!response || !response.ok || !response.body) return { matched: null, message: null, accountFallback: false, replacementBody: null };
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -314,9 +319,32 @@ export class CodexExecutor extends BaseExecutor {
     let text = "";
     let matched = null;
     let accountFallback = false;
+    const peekStartedAt = Date.now();
+    let peekTimer = null;
     try {
       while (text.length < CODEX_SSE_PEEK_BYTES) {
-        const { done, value } = await reader.read();
+        const remaining = timeoutMs - (Date.now() - peekStartedAt);
+        if (remaining <= 0) {
+          dbg("CODEX", "peek deadline reached; relaying stream live");
+          break;
+        }
+        const readPromise = reader.read();
+        readPromise.catch(() => { /* settled on releaseLock or stream error */ });
+        let read;
+        try {
+          read = await Promise.race([
+            readPromise,
+            new Promise((_, reject) => {
+              peekTimer = setTimeout(() => reject(new Error("peek deadline")), remaining);
+            }),
+          ]);
+          clearTimeout(peekTimer);
+          peekTimer = null;
+        } catch (e) {
+          dbg("CODEX", `peek interrupted (${e.message}); relaying stream live`);
+          break;
+        }
+        const { done, value } = read;
         if (done) break;
         chunks.push(value);
         text += decoder.decode(value, { stream: true });
@@ -329,6 +357,8 @@ export class CodexExecutor extends BaseExecutor {
       }
     } catch (e) {
       dbg("CODEX", `peek read error: ${e.message}`);
+    } finally {
+      if (peekTimer) clearTimeout(peekTimer);
     }
 
     if (matched) {
